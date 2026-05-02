@@ -1,5 +1,6 @@
 -- ae2_dashboard.lua
 -- Professional rotating AE2 dashboard for CC:Tweaked + Advanced Peripherals ME Bridge.
+-- Includes getNetwork() fallback support for energy/channel diagnostics.
 
 -- =========================
 -- CONFIG
@@ -16,8 +17,9 @@ local CONFIG = {
     topItemCount = 24,
     showChannelMethodHints = true,
 
-    -- If your ME Bridge cannot report channels, you can use manual mode.
-    -- channelMode = "auto" or "manual"
+    -- Channel mode:
+    -- "auto"   = try bridge methods and getNetwork() fields
+    -- "manual" = use the manualChannels values below
     channelMode = "auto",
 
     manualChannels = {
@@ -131,6 +133,19 @@ local function cleanLabel(text, maxLen)
     return text
 end
 
+local function getTableNumber(t, keys)
+    if type(t) ~= "table" then return nil end
+
+    for _, key in ipairs(keys) do
+        local value = t[key]
+        local n = tonumber(value)
+
+        if n then return n end
+    end
+
+    return nil
+end
+
 -- =========================
 -- PERIPHERAL DISCOVERY
 -- =========================
@@ -154,8 +169,8 @@ end
 
 local function findBridge()
     local preferredTypes = {
-        "me_bridge",
         "meBridge",
+        "me_bridge",
     }
 
     for _, typeName in ipairs(preferredTypes) do
@@ -180,7 +195,7 @@ local function findBridge()
         for _, t in ipairs(types) do
             local lower = string.lower(t)
 
-            if lower == "mebridge" or lower == "me_bridge" or lower:find("me") and lower:find("bridge") then
+            if lower == "mebridge" or lower == "me_bridge" or (lower:find("me") and lower:find("bridge")) then
                 return peripheral.wrap(name), name
             end
         end
@@ -451,6 +466,18 @@ local function getItemAmount(item)
     return tonumber(amount) or 0
 end
 
+local function fetchNetworkInfo()
+    if hasMethod("getNetwork") then
+        local ok, result = callBridge("getNetwork")
+
+        if ok and type(result) == "table" then
+            return result, "getNetwork"
+        end
+    end
+
+    return nil, nil
+end
+
 local function fetchItems()
     local items, methodUsed = firstTable({ "getItems" }, { {} })
 
@@ -552,7 +579,7 @@ local function fetchCells()
     }
 end
 
-local function fetchStorage(cells)
+local function fetchStorage(cells, network)
     local used = firstNumber({ "getUsedItemStorage" })
     local total = firstNumber({ "getTotalItemStorage" })
     local available = firstNumber({ "getAvailableItemStorage" })
@@ -564,6 +591,25 @@ local function fetchStorage(cells)
     if (not used or not total) and cells and cells.usedBytes and cells.totalBytes then
         used = used or cells.usedBytes
         total = total or cells.totalBytes
+    end
+
+    if type(network) == "table" then
+        used = used or getTableNumber(network, {
+            "usedItemStorage",
+            "itemStorageUsed",
+            "usedStorage",
+            "bytesUsed",
+            "usedBytes",
+        })
+
+        total = total or getTableNumber(network, {
+            "totalItemStorage",
+            "itemStorageTotal",
+            "totalStorage",
+            "bytesTotal",
+            "totalBytes",
+            "storageCapacity",
+        })
     end
 
     local externUsed = firstNumber({ "getUsedExternItemStorage" })
@@ -579,11 +625,40 @@ local function fetchStorage(cells)
     }
 end
 
-local function fetchEnergy()
+local function fetchEnergy(network)
     local stored = firstNumber({ "getStoredEnergy", "getEnergyStorage" })
     local capacity = firstNumber({ "getEnergyCapacity", "getMaxEnergyStorage" })
     local usage = firstNumber({ "getEnergyUsage" })
     local injection = firstNumber({ "getAvgPowerInjection" })
+
+    if type(network) == "table" then
+        stored = stored or getTableNumber(network, {
+            "storedEnergy",
+            "energyStored",
+            "energy",
+            "stored",
+        })
+
+        capacity = capacity or getTableNumber(network, {
+            "energyCapacity",
+            "maxEnergy",
+            "energyMax",
+            "capacity",
+        })
+
+        usage = usage or getTableNumber(network, {
+            "energyUsage",
+            "usage",
+            "powerUsage",
+        })
+
+        injection = injection or getTableNumber(network, {
+            "avgPowerInjection",
+            "powerInjection",
+            "injection",
+            "energyInjection",
+        })
+    end
 
     return {
         stored = stored,
@@ -619,25 +694,26 @@ local function fetchCrafting()
     }
 end
 
-local function getTableNumber(t, keys)
-    if type(t) ~= "table" then return nil end
-
-    for _, key in ipairs(keys) do
-        local value = t[key]
-        local n = tonumber(value)
-
-        if n then return n end
-    end
-
-    return nil
-end
-
-local function fetchChannels()
+local function fetchChannels(network, networkMethod)
     local channelMethods = {}
 
     for methodName in pairs(bridgeMethods) do
         if string.lower(methodName):find("channel") then
             table.insert(channelMethods, methodName)
+        end
+    end
+
+    if hasMethod("getNetwork") then
+        local hasGetNetworkListed = false
+        for _, methodName in ipairs(channelMethods) do
+            if methodName == "getNetwork" then
+                hasGetNetworkListed = true
+                break
+            end
+        end
+
+        if not hasGetNetworkListed then
+            table.insert(channelMethods, "getNetwork")
         end
     end
 
@@ -661,6 +737,38 @@ local function fetchChannels()
     local total = nil
     local methodUsed = nil
 
+    -- First try fields from getNetwork(). This is modpack/version dependent.
+    if type(network) == "table" then
+        used = getTableNumber(network, {
+            "usedChannels",
+            "channelsUsed",
+            "channelUsage",
+            "activeChannels",
+            "inUseChannels",
+            "used_channels",
+            "channels_used",
+            "active_channels",
+            "in_use_channels",
+        })
+
+        total = getTableNumber(network, {
+            "totalChannels",
+            "maxChannels",
+            "channelCapacity",
+            "channelsTotal",
+            "channelsMax",
+            "total_channels",
+            "max_channels",
+            "capacityChannels",
+            "channel_capacity",
+        })
+
+        if used or total then
+            methodUsed = networkMethod or "getNetwork"
+        end
+    end
+
+    -- Then try table-style channel methods if the bridge has any.
     local tableMethods = {
         "getChannels",
         "getChannelInfo",
@@ -671,7 +779,7 @@ local function fetchChannels()
     }
 
     for _, methodName in ipairs(tableMethods) do
-        if hasMethod(methodName) then
+        if (not used or not total) and hasMethod(methodName) then
             local ok, result = callBridge(methodName)
 
             if ok and type(result) == "table" then
@@ -693,16 +801,17 @@ local function fetchChannels()
                     "available",
                 })
 
-                methodUsed = methodName
+                methodUsed = methodUsed or methodName
                 break
             elseif ok and tonumber(result) then
-                used = tonumber(result)
-                methodUsed = methodName
+                used = used or tonumber(result)
+                methodUsed = methodUsed or methodName
                 break
             end
         end
     end
 
+    -- Finally try number-style channel methods.
     if not used then
         used, methodUsed = firstNumber({
             "getUsedChannels",
@@ -798,18 +907,21 @@ local function collectData()
     end
 
     local connection = fetchConnection()
+    local network, networkMethod = fetchNetworkInfo()
     local items = fetchItems()
     local cells = fetchCells()
-    local storage = fetchStorage(cells)
-    local energy = fetchEnergy()
+    local storage = fetchStorage(cells, network)
+    local energy = fetchEnergy(network)
     local crafting = fetchCrafting()
-    local channels = fetchChannels()
+    local channels = fetchChannels(network, networkMethod)
     local watched = fetchWatchedItems(items)
 
     return {
         hasBridge = true,
         bridgeName = bridgeName or "unknown",
         connection = connection,
+        network = network,
+        networkMethod = networkMethod,
         items = items,
         cells = cells,
         storage = storage,
@@ -890,7 +1002,7 @@ local function drawNoBridge(w, h, pageIndex, pageId)
 
     writeAt(x + 2, y + 2, "No Advanced Peripherals ME Bridge was detected.", colors.white, THEME.panel, boxW - 4)
     writeAt(x + 2, y + 4, "Check wired modem, bridge block, and AE2 connection.", colors.lightGray, THEME.panel, boxW - 4)
-    writeAt(x + 2, y + 6, "Expected peripheral type: me_bridge or meBridge", colors.orange, THEME.panel, boxW - 4)
+    writeAt(x + 2, y + 6, "Expected peripheral type: meBridge or me_bridge", colors.orange, THEME.panel, boxW - 4)
 end
 
 local function drawStatusCard(x, y, width, data)
@@ -1122,23 +1234,24 @@ local function drawCraftingChannelsPage(w, h, data)
         local diagH = h - diagY - 1
 
         if diagH >= 6 then
-            drawCard(2, diagY, w - 2, diagH, "CHANNEL METHOD DETECTION")
+            drawCard(2, diagY, w - 2, diagH, "NETWORK / CHANNEL DETECTION")
 
-            writeAt(4, diagY + 2, "Mode: " .. CONFIG.channelMode, colors.white, THEME.panel, w - 6)
-            writeAt(4, diagY + 3, "Method Used: " .. safeToString(data.channels.methodUsed or "none"), colors.cyan, THEME.panel, w - 6)
+            writeAt(4, diagY + 2, "Channel Mode: " .. CONFIG.channelMode, colors.white, THEME.panel, w - 6)
+            writeAt(4, diagY + 3, "Channel Source: " .. safeToString(data.channels.methodUsed or "none"), colors.cyan, THEME.panel, w - 6)
+            writeAt(4, diagY + 4, "Network Source: " .. safeToString(data.networkMethod or "none"), colors.cyan, THEME.panel, w - 6)
 
             if #data.channels.methods > 0 then
-                writeAt(4, diagY + 5, "Detected channel-related methods:", colors.lightGray, THEME.panel, w - 6)
+                writeAt(4, diagY + 6, "Detected channel/network-related methods:", colors.lightGray, THEME.panel, w - 6)
 
-                local rowY = diagY + 6
+                local rowY = diagY + 7
                 for _, methodName in ipairs(data.channels.methods) do
                     if rowY >= h then break end
                     writeAt(6, rowY, "- " .. methodName, colors.white, THEME.panel, w - 8)
                     rowY = rowY + 1
                 end
             else
-                writeAt(4, diagY + 5, "No channel-related bridge methods detected.", colors.orange, THEME.panel, w - 6)
-                writeAt(4, diagY + 7, "Use CONFIG.channelMode = \"manual\" if you want fixed channel values.", colors.lightGray, THEME.panel, w - 6)
+                writeAt(4, diagY + 6, "No channel-related bridge methods detected.", colors.orange, THEME.panel, w - 6)
+                writeAt(4, diagY + 8, "Use CONFIG.channelMode = \"manual\" if you want fixed channel values.", colors.lightGray, THEME.panel, w - 6)
             end
         end
     else
@@ -1159,20 +1272,50 @@ local function drawDiagnosticsPage(w, h, data)
     drawCard(x, y, width, height, "DIAGNOSTICS")
 
     metricLine(x + 2, y + 2, "Bridge", data.bridgeName or "unknown", width - 4, THEME.accent)
-    metricLine(x + 2, y + 3, "Item Method", data.items.method or "unknown", width - 4, THEME.good)
-    metricLine(x + 2, y + 4, "Cell Method", data.cells.method or "unknown", width - 4, THEME.good)
-    metricLine(x + 2, y + 5, "Channel Source", data.channels.methodUsed or "none", width - 4, THEME.warn)
+    metricLine(x + 2, y + 3, "Network Method", data.networkMethod or "none", width - 4, THEME.accent)
+    metricLine(x + 2, y + 4, "Item Method", data.items.method or "unknown", width - 4, THEME.good)
+    metricLine(x + 2, y + 5, "Cell Method", data.cells.method or "unknown", width - 4, THEME.good)
+    metricLine(x + 2, y + 6, "Channel Source", data.channels.methodUsed or "none", width - 4, THEME.warn)
 
-    writeAt(x + 2, y + 7, "Detected ME Bridge Methods:", colors.lightGray, THEME.panel, width - 4)
+    local rowY = y + 8
+    local maxY = y + height - 1
+
+    if type(data.network) == "table" then
+        writeAt(x + 2, rowY, "getNetwork() fields:", colors.lightGray, THEME.panel, width - 4)
+        rowY = rowY + 1
+
+        local networkKeys = {}
+        for key in pairs(data.network) do
+            table.insert(networkKeys, key)
+        end
+        table.sort(networkKeys)
+
+        for _, key in ipairs(networkKeys) do
+            if rowY > maxY then break end
+
+            local value = data.network[key]
+            if type(value) ~= "table" and type(value) ~= "function" then
+                writeAt(x + 4, rowY, "- " .. safeToString(key) .. " = " .. safeToString(value), colors.white, THEME.panel, width - 6)
+                rowY = rowY + 1
+            end
+        end
+
+        rowY = rowY + 1
+    else
+        writeAt(x + 2, rowY, "getNetwork() unavailable or returned no table.", colors.orange, THEME.panel, width - 4)
+        rowY = rowY + 2
+    end
+
+    if rowY <= maxY then
+        writeAt(x + 2, rowY, "Detected ME Bridge Methods:", colors.lightGray, THEME.panel, width - 4)
+        rowY = rowY + 1
+    end
 
     local methods = {}
     for methodName in pairs(bridgeMethods) do
         table.insert(methods, methodName)
     end
     table.sort(methods)
-
-    local rowY = y + 8
-    local maxY = y + height - 1
 
     for _, methodName in ipairs(methods) do
         if rowY > maxY then break end
@@ -1181,7 +1324,7 @@ local function drawDiagnosticsPage(w, h, data)
         rowY = rowY + 1
     end
 
-    if #methods == 0 then
+    if #methods == 0 and rowY <= maxY then
         writeAt(x + 4, rowY, "No methods detected.", colors.orange, THEME.panel, width - 6)
     end
 end
