@@ -1,6 +1,5 @@
 -- ae2_dashboard.lua
--- Professional AE2 dashboard for CC:Tweaked + Advanced Peripherals ME Bridge
--- Designed for a large Advanced Monitor.
+-- Professional rotating AE2 dashboard for CC:Tweaked + Advanced Peripherals ME Bridge.
 
 -- =========================
 -- CONFIG
@@ -8,28 +7,41 @@
 
 local CONFIG = {
     title = "SGNet AE2 Network",
-    refreshSeconds = 5,
 
-    -- 0.5 is best for large dashboards.
-    -- Increase to 1 if your monitor is physically small.
+    refreshSeconds = 5,
+    pageRotateSeconds = 12,
+
     monitorTextScale = 0.5,
 
-    -- Number of highest-count items shown on the right panel.
-    topItemCount = 10,
-
-    -- Set this to true if you want a small method hint in the channel panel.
+    topItemCount = 24,
     showChannelMethodHints = true,
 
-    -- Customize these for your base.
+    -- If your ME Bridge cannot report channels, you can use manual mode.
+    -- channelMode = "auto" or "manual"
+    channelMode = "auto",
+
+    manualChannels = {
+        used = 0,
+        total = 32,
+    },
+
+    pages = {
+        "overview",
+        "items",
+        "watched",
+        "crafting",
+        "diagnostics",
+    },
+
     watchedItems = {
-        { name = "minecraft:iron_ingot",       label = "Iron" },
-        { name = "minecraft:gold_ingot",       label = "Gold" },
-        { name = "minecraft:diamond",          label = "Diamonds" },
-        { name = "minecraft:redstone",         label = "Redstone" },
-        { name = "minecraft:quartz",           label = "Quartz" },
-        { name = "ae2:certus_quartz_crystal",  label = "Certus" },
-        { name = "ae2:fluix_crystal",          label = "Fluix" },
-        { name = "minecraft:coal",             label = "Coal" },
+        { name = "minecraft:iron_ingot",      label = "Iron" },
+        { name = "minecraft:gold_ingot",      label = "Gold" },
+        { name = "minecraft:diamond",         label = "Diamonds" },
+        { name = "minecraft:redstone",        label = "Redstone" },
+        { name = "minecraft:quartz",          label = "Quartz" },
+        { name = "ae2:certus_quartz_crystal", label = "Certus" },
+        { name = "ae2:fluix_crystal",         label = "Fluix" },
+        { name = "minecraft:coal",            label = "Coal" },
     },
 }
 
@@ -57,9 +69,11 @@ end
 local function tableCount(t)
     local count = 0
     if type(t) ~= "table" then return 0 end
+
     for _ in pairs(t) do
         count = count + 1
     end
+
     return count
 end
 
@@ -105,14 +119,13 @@ end
 local function cleanLabel(text, maxLen)
     text = safeToString(text)
 
-    -- Strip common namespaces for prettier display.
     text = text:gsub("^minecraft:", "")
     text = text:gsub("^ae2:", "")
     text = text:gsub("^appliedenergistics2:", "")
     text = text:gsub("_", " ")
 
     if maxLen and #text > maxLen then
-        return text:sub(1, maxLen - 3) .. "..."
+        return text:sub(1, math.max(1, maxLen - 3)) .. "..."
     end
 
     return text
@@ -139,23 +152,7 @@ local function getPeripheralTypes(name)
     return types
 end
 
-local function typeMatches(name, wanted)
-    if peripheral.hasType then
-        local ok, result = pcall(peripheral.hasType, name, wanted)
-        if ok and result then return true end
-    end
-
-    for _, t in ipairs(getPeripheralTypes(name)) do
-        if t == wanted then
-            return true
-        end
-    end
-
-    return false
-end
-
 local function findBridge()
-    -- Advanced Peripherals changed the peripheral name in newer versions.
     local preferredTypes = {
         "me_bridge",
         "meBridge",
@@ -163,6 +160,7 @@ local function findBridge()
 
     for _, typeName in ipairs(preferredTypes) do
         local found = { peripheral.find(typeName) }
+
         if found[1] then
             local wrapped = found[1]
             local name = nil
@@ -176,12 +174,12 @@ local function findBridge()
         end
     end
 
-    -- Fallback scan for anything that looks like an ME Bridge.
     for _, name in ipairs(peripheral.getNames()) do
         local types = getPeripheralTypes(name)
 
         for _, t in ipairs(types) do
             local lower = string.lower(t)
+
             if lower == "mebridge" or lower == "me_bridge" or lower:find("me") and lower:find("bridge") then
                 return peripheral.wrap(name), name
             end
@@ -207,6 +205,7 @@ end
 local function hasMethod(methodName)
     if bridgeMethods[methodName] then return true end
     if bridge and type(bridge[methodName]) == "function" then return true end
+
     return false
 end
 
@@ -233,11 +232,10 @@ local function firstNumber(methodNames, args)
     for _, methodName in ipairs(methodNames) do
         if hasMethod(methodName) then
             local ok, a, b, c = callBridge(methodName, unpackFn(args))
+
             if ok then
                 local n = tonumber(a) or tonumber(b) or tonumber(c)
-                if n then
-                    return n, methodName
-                end
+                if n then return n, methodName end
             end
         end
     end
@@ -251,6 +249,7 @@ local function firstTable(methodNames, args)
     for _, methodName in ipairs(methodNames) do
         if hasMethod(methodName) then
             local ok, result = callBridge(methodName, unpackFn(args))
+
             if ok and type(result) == "table" then
                 return result, methodName
             end
@@ -270,7 +269,6 @@ local THEME = {
     bg = colors.black,
     panel = colors.gray,
     panelDark = colors.gray,
-    panelAlt = colors.lightGray,
     header = colors.blue,
     title = colors.white,
     text = colors.white,
@@ -338,6 +336,7 @@ local function fillRect(x, y, width, height, bg)
     setBg(screen, bg)
 
     local line = string.rep(" ", width)
+
     for yy = y, y + height - 1 do
         screen.setCursorPos(x, yy)
         screen.write(line)
@@ -345,8 +344,7 @@ local function fillRect(x, y, width, height, bg)
 end
 
 local function drawCard(x, y, width, height, title)
-    fillRect(x, y, width, height, THEME.panelDark)
-
+    fillRect(x, y, width, height, THEME.panel)
     writeAt(x + 1, y, " " .. title .. " ", THEME.title, THEME.header, width - 2)
 end
 
@@ -357,6 +355,7 @@ local function drawProgressBar(x, y, width, pct, label, fillColor)
 
     if pct then
         local filled = clamp(round(width * pct), 0, width)
+
         if filled > 0 then
             fillRect(x, y, filled, 1, fillColor or THEME.barFill)
         end
@@ -364,6 +363,7 @@ local function drawProgressBar(x, y, width, pct, label, fillColor)
 
     local text = " " .. safeToString(label) .. " "
     local tx = x + math.floor((width - #text) / 2)
+
     if tx < x then tx = x end
 
     writeAt(tx, y, text, colors.white, nil, width)
@@ -376,8 +376,8 @@ local function metricLine(x, y, label, value, width, valueColor)
 
     if available < 4 then available = 4 end
 
-    writeAt(x, y, labelText, THEME.muted, THEME.panelDark, width)
-    writeAt(x + width - math.min(#valueText, available), y, valueText, valueColor or THEME.text, THEME.panelDark, available)
+    writeAt(x, y, labelText, THEME.muted, THEME.panel, width)
+    writeAt(x + width - math.min(#valueText, available), y, valueText, valueColor or THEME.text, THEME.panel, available)
 end
 
 local function statusPill(x, y, label, state, width)
@@ -395,7 +395,7 @@ local function statusPill(x, y, label, state, width)
         text = " UNKNOWN "
     end
 
-    writeAt(x, y, label .. " ", THEME.muted, THEME.panelDark, width)
+    writeAt(x, y, label .. " ", THEME.muted, THEME.panel, width)
     writeAt(x + #label + 1, y, text, colors.black, color, math.max(1, width - #label - 1))
 end
 
@@ -415,6 +415,7 @@ local function getObjectField(obj, fieldNames, methodNames)
     for _, method in ipairs(methodNames or {}) do
         if type(obj[method]) == "function" then
             local ok, result = pcall(obj[method])
+
             if ok and result ~= nil then
                 return result
             end
@@ -560,7 +561,6 @@ local function fetchStorage(cells)
         total = used + available
     end
 
-    -- Fallback to cell-derived bytes if direct storage methods are unavailable.
     if (not used or not total) and cells and cells.usedBytes and cells.totalBytes then
         used = used or cells.usedBytes
         total = total or cells.totalBytes
@@ -604,6 +604,7 @@ local function fetchCrafting()
 
     if type(cpus) == "table" then
         busyCpus = 0
+
         for _, cpu in pairs(cpus) do
             if type(cpu) == "table" and cpu.isBusy then
                 busyCpus = busyCpus + 1
@@ -624,6 +625,7 @@ local function getTableNumber(t, keys)
     for _, key in ipairs(keys) do
         local value = t[key]
         local n = tonumber(value)
+
         if n then return n end
     end
 
@@ -641,11 +643,24 @@ local function fetchChannels()
 
     table.sort(channelMethods)
 
+    if CONFIG.channelMode == "manual" then
+        local used = tonumber(CONFIG.manualChannels.used)
+        local total = tonumber(CONFIG.manualChannels.total)
+
+        return {
+            used = used,
+            total = total,
+            pct = percentValue(used, total),
+            supported = true,
+            methods = channelMethods,
+            methodUsed = "manual config",
+        }
+    end
+
     local used = nil
     local total = nil
     local methodUsed = nil
 
-    -- Try table-style channel info methods first.
     local tableMethods = {
         "getChannels",
         "getChannelInfo",
@@ -658,6 +673,7 @@ local function fetchChannels()
     for _, methodName in ipairs(tableMethods) do
         if hasMethod(methodName) then
             local ok, result = callBridge(methodName)
+
             if ok and type(result) == "table" then
                 used = used or getTableNumber(result, {
                     "used",
@@ -687,7 +703,6 @@ local function fetchChannels()
         end
     end
 
-    -- Try common number-style method names.
     if not used then
         used, methodUsed = firstNumber({
             "getUsedChannels",
@@ -733,9 +748,9 @@ local function fetchWatchedItems(itemData)
             amount = itemData.map[watch.name].amount
         end
 
-        -- Fallback direct lookup.
         if amount == nil and hasMethod("getItem") then
             local ok, result = callBridge("getItem", { name = watch.name })
+
             if ok and type(result) == "table" then
                 amount = getItemAmount(result)
             end
@@ -806,24 +821,62 @@ local function collectData()
 end
 
 -- =========================
--- DRAWING
+-- DRAWING: COMMON CARDS
 -- =========================
 
-local function drawHeader(w)
+local function getPageTitle(pageId)
+    if pageId == "overview" then return "Overview" end
+    if pageId == "items" then return "Top Items" end
+    if pageId == "watched" then return "Watched Resources" end
+    if pageId == "crafting" then return "Crafting / Channels" end
+    if pageId == "diagnostics" then return "Diagnostics" end
+
+    return "Dashboard"
+end
+
+local function drawHeader(w, pageIndex, pageId)
     fillRect(1, 1, w, 3, THEME.header)
 
-    writeAt(2, 1, CONFIG.title, colors.white, THEME.header, w - 2)
+    local pageTitle = getPageTitle(pageId)
+    local title = CONFIG.title .. " - " .. pageTitle
+
+    writeAt(2, 1, title, colors.white, THEME.header, w - 2)
 
     local clock = textutils and textutils.formatTime and textutils.formatTime(os.time(), true) or "running"
-    local rightText = "Refresh " .. CONFIG.refreshSeconds .. "s | " .. clock
+    local rightText = "Page " .. pageIndex .. "/" .. #CONFIG.pages .. " | " .. clock
+
     writeAt(math.max(2, w - #rightText), 1, rightText, colors.lightGray, THEME.header, #rightText)
 
     writeAt(2, 2, "Applied Energistics 2 Dashboard", colors.lightGray, THEME.header, w - 2)
 end
 
-local function drawNoBridge(w, h)
+local function drawFooter(w, h, data, pageIndex)
+    fillRect(1, h, w, 1, THEME.bg)
+
+    local bridgeText = "ME Bridge: " .. safeToString(data.bridgeName or "unknown")
+    local rotateText = "Rotates every " .. CONFIG.pageRotateSeconds .. "s | Ctrl+T to terminate"
+
+    writeAt(2, h, bridgeText, colors.lightGray, THEME.bg, math.floor(w / 2))
+    writeAt(math.max(2, w - #rotateText), h, rotateText, colors.lightGray, THEME.bg, #rotateText)
+
+    local dots = ""
+    for i = 1, #CONFIG.pages do
+        if i == pageIndex then
+            dots = dots .. "[" .. i .. "]"
+        else
+            dots = dots .. " " .. i .. " "
+        end
+    end
+
+    local dx = math.floor((w - #dots) / 2)
+    if dx > 2 then
+        writeAt(dx, h, dots, colors.cyan, THEME.bg, #dots)
+    end
+end
+
+local function drawNoBridge(w, h, pageIndex, pageId)
     fillRect(1, 1, w, h, THEME.bg)
-    drawHeader(w)
+    drawHeader(w, pageIndex, pageId)
 
     local boxW = math.min(w - 4, 58)
     local boxH = 8
@@ -834,14 +887,14 @@ local function drawNoBridge(w, h)
     if y < 4 then y = 4 end
 
     drawCard(x, y, boxW, boxH, "ME BRIDGE NOT FOUND")
-    writeAt(x + 2, y + 2, "No Advanced Peripherals ME Bridge was detected.", colors.white, THEME.panelDark, boxW - 4)
-    writeAt(x + 2, y + 4, "Check wired modem, bridge block, and AE2 connection.", colors.lightGray, THEME.panelDark, boxW - 4)
-    writeAt(x + 2, y + 6, "Expected peripheral type: me_bridge or meBridge", colors.orange, THEME.panelDark, boxW - 4)
+
+    writeAt(x + 2, y + 2, "No Advanced Peripherals ME Bridge was detected.", colors.white, THEME.panel, boxW - 4)
+    writeAt(x + 2, y + 4, "Check wired modem, bridge block, and AE2 connection.", colors.lightGray, THEME.panel, boxW - 4)
+    writeAt(x + 2, y + 6, "Expected peripheral type: me_bridge or meBridge", colors.orange, THEME.panel, boxW - 4)
 end
 
 local function drawStatusCard(x, y, width, data)
     drawCard(x, y, width, 5, "STATUS")
-
     statusPill(x + 2, y + 2, "Grid", data.connection.online, width - 4)
     metricLine(x + 2, y + 3, "Bridge", data.bridgeName or "unknown", width - 4, THEME.accent)
 end
@@ -888,14 +941,14 @@ local function drawChannelCard(x, y, width, data)
         local method = data.channels.methodUsed or "auto-detected"
         metricLine(x + 2, y + 5, "Source", method, width - 4, THEME.accent)
     else
-        writeAt(x + 2, y + 2, "Channel count unsupported by this bridge API.", colors.orange, THEME.panelDark, width - 4)
+        writeAt(x + 2, y + 2, "Channel count unsupported by this bridge API.", colors.orange, THEME.panel, width - 4)
 
         if CONFIG.showChannelMethodHints then
             if #data.channels.methods > 0 then
-                writeAt(x + 2, y + 4, "Detected:", colors.lightGray, THEME.panelDark, width - 4)
-                writeAt(x + 2, y + 5, table.concat(data.channels.methods, ", "), colors.cyan, THEME.panelDark, width - 4)
+                writeAt(x + 2, y + 4, "Detected:", colors.lightGray, THEME.panel, width - 4)
+                writeAt(x + 2, y + 5, table.concat(data.channels.methods, ", "), colors.cyan, THEME.panel, width - 4)
             else
-                writeAt(x + 2, y + 4, "No channel-related methods found.", colors.lightGray, THEME.panelDark, width - 4)
+                writeAt(x + 2, y + 4, "No channel-related methods found.", colors.lightGray, THEME.panel, width - 4)
             end
         end
     end
@@ -922,111 +975,39 @@ local function drawCellsCard(x, y, width, data)
         metricLine(x + 2, y + 3, "Cell Bytes", formatNumber(data.cells.usedBytes) .. " / " .. formatNumber(data.cells.totalBytes), width - 4, colors.white)
         drawProgressBar(x + 2, y + 4, width - 4, percentValue(data.cells.usedBytes, data.cells.totalBytes), formatPercent(data.cells.usedBytes, data.cells.totalBytes), THEME.accent)
     else
-        writeAt(x + 2, y + 4, "Cell byte details unavailable.", colors.lightGray, THEME.panelDark, width - 4)
+        writeAt(x + 2, y + 4, "Cell byte details unavailable.", colors.lightGray, THEME.panel, width - 4)
     end
 end
 
-local function drawTopItemsCard(x, y, width, height, data)
-    drawCard(x, y, width, height, "TOP STORED ITEMS")
+-- =========================
+-- DRAWING: PAGES
+-- =========================
 
-    local maxRows = math.min(CONFIG.topItemCount, height - 3)
-
-    writeAt(x + 2, y + 2, "Item", colors.lightGray, THEME.panelDark, width - 4)
-    writeAt(x + width - 11, y + 2, "Amount", colors.lightGray, THEME.panelDark, 10)
-
-    for i = 1, maxRows do
-        local item = data.items.list[i]
-        local rowY = y + 2 + i
-
-        if item then
-            local nameWidth = width - 16
-            local label = cleanLabel(item.displayName or item.name, nameWidth)
-            local amount = formatNumber(item.amount)
-
-            writeAt(x + 2, rowY, label, colors.white, THEME.panelDark, nameWidth)
-            writeAt(x + width - 11, rowY, amount, THEME.good, THEME.panelDark, 10)
-        else
-            writeAt(x + 2, rowY, "-", colors.gray, THEME.panelDark, width - 4)
-        end
-    end
-end
-
-local function drawWatchedCard(x, y, width, height, data)
-    drawCard(x, y, width, height, "WATCHED RESOURCES")
-
-    local maxRows = math.min(#data.watched, height - 2)
-
-    for i = 1, maxRows do
-        local item = data.watched[i]
-        local rowY = y + i + 1
-        local labelWidth = width - 16
-
-        writeAt(x + 2, rowY, cleanLabel(item.label, labelWidth), colors.white, THEME.panelDark, labelWidth)
-        writeAt(x + width - 11, rowY, formatNumber(item.amount), THEME.accent, THEME.panelDark, 10)
-    end
-end
-
-local function drawFooter(w, h, data)
-    local footer = "ME Bridge: " .. safeToString(data.bridgeName or "unknown") .. " | Press Ctrl+T to terminate"
-    writeAt(2, h, footer, colors.lightGray, THEME.bg, w - 2)
-end
-
-local function drawDashboard(data)
-    screen = screen or findScreen()
-
-    if screen.setTextScale then
-        pcall(screen.setTextScale, CONFIG.monitorTextScale)
-    end
-
-    local w, h = screen.getSize()
-
-    fillRect(1, 1, w, h, THEME.bg)
-    drawHeader(w)
-
-    if not data.hasBridge then
-        drawNoBridge(w, h)
-        return
-    end
-
-    -- Two-column layout for large monitors.
+local function drawOverviewPage(w, h, data)
     if w >= 70 and h >= 25 then
-        local leftW = math.floor(w * 0.42)
-        if leftW < 30 then leftW = 30 end
-        if leftW > 42 then leftW = 42 end
+        local cardW = math.floor((w - 6) / 2)
+        local leftX = 2
+        local rightX = leftX + cardW + 2
 
-        local rightX = leftW + 2
-        local rightW = w - rightX
+        drawStatusCard(leftX, 5, cardW, data)
+        drawStorageCard(rightX, 5, cardW, data)
 
-        drawStatusCard(2, 5, leftW - 1, data)
-        drawStorageCard(2, 11, leftW - 1, data)
-        drawEnergyCard(2, 19, leftW - 1, data)
+        drawEnergyCard(leftX, 13, cardW, data)
+        drawChannelCard(rightX, 13, cardW, data)
 
-        if h >= 34 then
-            drawChannelCard(2, 27, leftW - 1, data)
-            drawCraftingCard(2, 35, leftW - 1, data)
-            drawCellsCard(2, 42, leftW - 1, data)
-        else
-            drawChannelCard(2, 27, leftW - 1, data)
-        end
-
-        local topHeight = math.min(16, h - 7)
-        drawTopItemsCard(rightX, 5, rightW - 1, topHeight, data)
-
-        local watchedY = 5 + topHeight + 1
-        local watchedH = h - watchedY - 1
-        if watchedH >= 6 then
-            drawWatchedCard(rightX, watchedY, rightW - 1, watchedH, data)
-        end
+        drawCraftingCard(leftX, 21, cardW, data)
+        drawCellsCard(rightX, 21, cardW, data)
     else
-        -- Compact stacked layout.
         local cardW = w - 2
         local y = 5
 
         drawStatusCard(2, y, cardW, data)
         y = y + 6
 
-        drawStorageCard(2, y, cardW, data)
-        y = y + 8
+        if y + 7 < h then
+            drawStorageCard(2, y, cardW, data)
+            y = y + 8
+        end
 
         if y + 7 < h then
             drawEnergyCard(2, y, cardW, data)
@@ -1035,15 +1016,210 @@ local function drawDashboard(data)
 
         if y + 7 < h then
             drawChannelCard(2, y, cardW, data)
-            y = y + 8
-        end
-
-        if y + 6 < h then
-            drawCraftingCard(2, y, cardW, data)
         end
     end
+end
 
-    drawFooter(w, h, data)
+local function drawItemsPage(w, h, data)
+    local x = 2
+    local y = 5
+    local width = w - 2
+    local height = h - 6
+
+    drawCard(x, y, width, height, "TOP STORED ITEMS")
+
+    local rowsAvailable = height - 3
+    local columns = 1
+
+    if w >= 90 then
+        columns = 2
+    end
+
+    local rowsPerColumn = math.floor(rowsAvailable)
+    local colWidth = math.floor((width - 4) / columns)
+
+    for col = 1, columns do
+        local colX = x + 2 + ((col - 1) * colWidth)
+        local startIndex = ((col - 1) * rowsPerColumn) + 1
+
+        writeAt(colX, y + 2, "Item", colors.lightGray, THEME.panel, colWidth - 12)
+        writeAt(colX + colWidth - 11, y + 2, "Amount", colors.lightGray, THEME.panel, 10)
+
+        for row = 1, rowsPerColumn do
+            local itemIndex = startIndex + row - 1
+
+            if itemIndex > CONFIG.topItemCount then
+                break
+            end
+
+            local item = data.items.list[itemIndex]
+            local rowY = y + 2 + row
+
+            if rowY >= h then break end
+
+            if item then
+                local nameWidth = colWidth - 13
+                local label = cleanLabel(item.displayName or item.name, nameWidth)
+                local amount = formatNumber(item.amount)
+
+                writeAt(colX, rowY, label, colors.white, THEME.panel, nameWidth)
+                writeAt(colX + colWidth - 11, rowY, amount, THEME.good, THEME.panel, 10)
+            else
+                writeAt(colX, rowY, "-", colors.gray, THEME.panel, colWidth - 2)
+            end
+        end
+    end
+end
+
+local function drawWatchedPage(w, h, data)
+    local x = 2
+    local y = 5
+    local width = w - 2
+    local height = h - 6
+
+    drawCard(x, y, width, height, "WATCHED RESOURCES")
+
+    local columns = 1
+    if w >= 80 then columns = 2 end
+
+    local colWidth = math.floor((width - 4) / columns)
+    local rowsPerColumn = math.ceil(#data.watched / columns)
+
+    for col = 1, columns do
+        local colX = x + 2 + ((col - 1) * colWidth)
+        local startIndex = ((col - 1) * rowsPerColumn) + 1
+
+        writeAt(colX, y + 2, "Resource", colors.lightGray, THEME.panel, colWidth - 12)
+        writeAt(colX + colWidth - 11, y + 2, "Stored", colors.lightGray, THEME.panel, 10)
+
+        for row = 1, rowsPerColumn do
+            local itemIndex = startIndex + row - 1
+            local item = data.watched[itemIndex]
+            local rowY = y + 2 + row
+
+            if not item or rowY >= h then
+                break
+            end
+
+            local labelWidth = colWidth - 13
+
+            writeAt(colX, rowY, cleanLabel(item.label, labelWidth), colors.white, THEME.panel, labelWidth)
+            writeAt(colX + colWidth - 11, rowY, formatNumber(item.amount), THEME.accent, THEME.panel, 10)
+        end
+    end
+end
+
+local function drawCraftingChannelsPage(w, h, data)
+    if w >= 70 then
+        local cardW = math.floor((w - 6) / 2)
+        local leftX = 2
+        local rightX = leftX + cardW + 2
+
+        drawCraftingCard(leftX, 5, cardW, data)
+        drawChannelCard(rightX, 5, cardW, data)
+
+        local diagY = 13
+        local diagH = h - diagY - 1
+
+        if diagH >= 6 then
+            drawCard(2, diagY, w - 2, diagH, "CHANNEL METHOD DETECTION")
+
+            writeAt(4, diagY + 2, "Mode: " .. CONFIG.channelMode, colors.white, THEME.panel, w - 6)
+            writeAt(4, diagY + 3, "Method Used: " .. safeToString(data.channels.methodUsed or "none"), colors.cyan, THEME.panel, w - 6)
+
+            if #data.channels.methods > 0 then
+                writeAt(4, diagY + 5, "Detected channel-related methods:", colors.lightGray, THEME.panel, w - 6)
+
+                local rowY = diagY + 6
+                for _, methodName in ipairs(data.channels.methods) do
+                    if rowY >= h then break end
+                    writeAt(6, rowY, "- " .. methodName, colors.white, THEME.panel, w - 8)
+                    rowY = rowY + 1
+                end
+            else
+                writeAt(4, diagY + 5, "No channel-related bridge methods detected.", colors.orange, THEME.panel, w - 6)
+                writeAt(4, diagY + 7, "Use CONFIG.channelMode = \"manual\" if you want fixed channel values.", colors.lightGray, THEME.panel, w - 6)
+            end
+        end
+    else
+        drawCraftingCard(2, 5, w - 2, data)
+
+        if h >= 19 then
+            drawChannelCard(2, 12, w - 2, data)
+        end
+    end
+end
+
+local function drawDiagnosticsPage(w, h, data)
+    local x = 2
+    local y = 5
+    local width = w - 2
+    local height = h - 6
+
+    drawCard(x, y, width, height, "DIAGNOSTICS")
+
+    metricLine(x + 2, y + 2, "Bridge", data.bridgeName or "unknown", width - 4, THEME.accent)
+    metricLine(x + 2, y + 3, "Item Method", data.items.method or "unknown", width - 4, THEME.good)
+    metricLine(x + 2, y + 4, "Cell Method", data.cells.method or "unknown", width - 4, THEME.good)
+    metricLine(x + 2, y + 5, "Channel Source", data.channels.methodUsed or "none", width - 4, THEME.warn)
+
+    writeAt(x + 2, y + 7, "Detected ME Bridge Methods:", colors.lightGray, THEME.panel, width - 4)
+
+    local methods = {}
+    for methodName in pairs(bridgeMethods) do
+        table.insert(methods, methodName)
+    end
+    table.sort(methods)
+
+    local rowY = y + 8
+    local maxY = y + height - 1
+
+    for _, methodName in ipairs(methods) do
+        if rowY > maxY then break end
+
+        writeAt(x + 4, rowY, "- " .. methodName, colors.white, THEME.panel, width - 6)
+        rowY = rowY + 1
+    end
+
+    if #methods == 0 then
+        writeAt(x + 4, rowY, "No methods detected.", colors.orange, THEME.panel, width - 6)
+    end
+end
+
+-- =========================
+-- DASHBOARD ROUTER
+-- =========================
+
+local PAGE_DRAWERS = {
+    overview = drawOverviewPage,
+    items = drawItemsPage,
+    watched = drawWatchedPage,
+    crafting = drawCraftingChannelsPage,
+    diagnostics = drawDiagnosticsPage,
+}
+
+local function drawDashboard(data, pageIndex)
+    screen = screen or findScreen()
+
+    if screen.setTextScale then
+        pcall(screen.setTextScale, CONFIG.monitorTextScale)
+    end
+
+    local w, h = screen.getSize()
+    local pageId = CONFIG.pages[pageIndex] or "overview"
+
+    fillRect(1, 1, w, h, THEME.bg)
+    drawHeader(w, pageIndex, pageId)
+
+    if not data.hasBridge then
+        drawNoBridge(w, h, pageIndex, pageId)
+        return
+    end
+
+    local drawer = PAGE_DRAWERS[pageId] or drawOverviewPage
+    drawer(w, h, data)
+
+    drawFooter(w, h, data, pageIndex)
 end
 
 -- =========================
@@ -1056,7 +1232,20 @@ local function bootMessage(message)
     print(message)
 end
 
-bootMessage("Starting AE2 Dashboard...")
+local function nextPage(currentPage)
+    currentPage = currentPage + 1
+
+    if currentPage > #CONFIG.pages then
+        currentPage = 1
+    end
+
+    return currentPage
+end
+
+bootMessage("Starting AE2 Rotating Dashboard...")
+
+local currentPage = 1
+local pageElapsed = 0
 
 while true do
     bridge, bridgeName = findBridge()
@@ -1068,7 +1257,14 @@ while true do
     end
 
     local data = collectData()
-    drawDashboard(data)
+    drawDashboard(data, currentPage)
 
     sleep(CONFIG.refreshSeconds)
+
+    pageElapsed = pageElapsed + CONFIG.refreshSeconds
+
+    if pageElapsed >= CONFIG.pageRotateSeconds then
+        currentPage = nextPage(currentPage)
+        pageElapsed = 0
+    end
 end
